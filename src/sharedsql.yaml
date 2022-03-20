@@ -1,0 +1,150 @@
+# sharedsql3.yaml
+# https://cloud.google.com/kubernetes-engine/docs/how-to/exposing-apps
+
+# We will replace the CONFIG_ variables with values from the config.sh file
+
+--- 
+# Create persistent storage to hold our data when our pods go down.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+   name: CONFIG_APP_NAME-pvc-claim
+   namespace: CONFIG_NAMESPACE
+spec:
+   accessModes:
+   - ReadWriteOnce
+   resources:
+     requests:
+       storage: 10Gi
+   storageClassName: linode-block-storage-retain
+
+---
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  ## name of ConfigMap. This will be referred from volume definition
+  name: CONFIG_APP_NAME-config
+  labels:
+    app: CONFIG_APP_NAME
+data:
+  ## default_auth is the name of config. This will be referred from volume mount definition
+  default_auth: |
+    [mysqld]
+    default_authentication_plugin= mysql_native_password
+
+--- 
+# MySQL 8.0
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: CONFIG_APP_NAME
+  labels:
+    app: CONFIG_APP_NAME
+apiVersion: apps/v1
+spec:
+  selector:
+    matchLabels:
+      app: CONFIG_APP_NAME
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: CONFIG_APP_NAME
+    spec:
+      containers:
+        - name: CONFIG_APP_NAME
+          image: mysql:8.0
+          imagePullPolicy: Always
+          ports:
+            - containerPort: CONFIG_INTERNAL_MYSQL_PORT
+              name: CONFIG_APP_NAME
+          env:
+          - name: MYSQL_ROOT_PASSWORD # use only for debugging
+            valueFrom:
+                secretKeyRef:
+                  name: CONFIG_APP_NAME-secrets
+                  key: rootpassword
+          - name: MYSQL_DATABASE
+            valueFrom:
+                secretKeyRef:
+                  name: CONFIG_APP_NAME-secrets
+                  key: database
+          - name: MYSQL_USER
+            valueFrom:
+                secretKeyRef:
+                  name: CONFIG_APP_NAME-secrets
+                  key: username
+          - name: MYSQL_PASSWORD
+            valueFrom:
+                secretKeyRef:
+                  name: CONFIG_APP_NAME-secrets
+                  key: password
+          volumeMounts:
+          - name: CONFIG_APP_NAME-config-volume ## specify volume name
+            mountPath: /etc/mysql/conf.d/default_auth.cnf ## path to mount file
+            subPath: default_auth ## name of config
+          - name: CONFIG_APP_NAME-persistent-storage
+            mountPath: /var/lib/mysql
+      volumes:
+        - name: CONFIG_APP_NAME-config-volume ## volume name
+          configMap:
+            name: CONFIG_APP_NAME-config ## name of ConfigMap
+        - name: CONFIG_APP_NAME-persistent-storage
+          persistentVolumeClaim:
+            claimName: CONFIG_APP_NAME-pvc-claim
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: CONFIG_APP_NAME-cluster-service
+  namespace: CONFIG_NAMESPACE
+spec:
+  type: ClusterIP
+  # Uncomment the below line to create a Headless Service
+  # clusterIP: None
+  selector:
+    app: mysql
+  ports:
+  - protocol: TCP
+    port: CONFIG_INTERNAL_MYSQL_PORT
+    targetPort: CONFIG_INTERNAL_MYSQL_PORT
+
+
+---
+# this creates a service to use internally
+ 
+apiVersion: v1
+kind: Service
+metadata:
+  name: CONFIG_APP_NAME
+  namespace: CONFIG_NAMESPACE
+spec:
+  ports:
+    - port: CONFIG_INTERNAL_MYSQL_PORT
+      name: CONFIG_APP_NAME
+  clusterIP: None
+  selector:
+    app: CONFIG_APP_NAME
+
+---
+
+# this will give an ip to be used externally
+# https://cloud.google.com/kubernetes-engine/docs/how-to/exposing-apps
+apiVersion: v1
+kind: Service
+metadata:
+  name: CONFIG_APP_NAME-lb-service
+  namespace: CONFIG_NAMESPACE
+spec:
+  type: LoadBalancer
+  selector:
+    app: CONFIG_APP_NAME
+
+  ports:
+  - protocol: TCP
+    port: CONFIG_EXTERNAL_MYSQL_PORT
+    targetPort: CONFIG_INTERNAL_MYSQL_PORT
